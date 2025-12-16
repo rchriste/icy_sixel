@@ -3,15 +3,15 @@
 A high-performance, 100% pure Rust implementation of a SIXEL encoder and decoder.
 
 I wanted a pure Rust implementation to simplify deployment of my cross-platform applications.
-In version 0.3.0, I completely rewrote the encoder using [imagequant](https://github.com/ImageOptim/libimagequant)
-(the same library that powers [Gifski](https://gif.ski/)). The results are stunning — far better
-than the old implementation, and it's faster too!
+In version 0.4.0, I rewrote the encoder using [quantette](https://github.com/IanManske/quantette),
+a high-quality color quantization library licensed under MIT/Apache-2.0. It uses Wu's algorithm
+with Floyd-Steinberg dithering for excellent results.
 
 The decoder is a clean-room implementation based on the SIXEL specification, with SIMD optimizations for maximum performance.
 
 ## Features
 
-- **SIXEL Encoder**: High-quality color quantization with imagequant and Floyd-Steinberg dithering
+- **SIXEL Encoder**: High-quality color quantization with quantette (Wu's algorithm + Floyd-Steinberg dithering)
 - **SIXEL Decoder**: Clean-room implementation with RGBA output and SSE2 SIMD acceleration
 - **Transparency Support**: Full alpha channel handling in both encoder and decoder
 - **Pure Rust**: No C dependencies, easy to build and deploy
@@ -23,7 +23,7 @@ Add this to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-icy_sixel = "0.3"
+icy_sixel = "0.4"
 ```
 
 ## Usage
@@ -48,11 +48,12 @@ print!("{}", sixel);
 ### Encoding with Custom Options
 
 ```rust
-use icy_sixel::{sixel_encode, EncodeOptions};
+use icy_sixel::{sixel_encode, EncodeOptions, QuantizeMethod};
 
 let options = EncodeOptions {
-    max_colors: 64,     // Use only 64 colors (2-256)
-    quality: 80,        // Quality 0-100 (higher = better quality but slower)
+    max_colors: 64,        // Use only 64 colors (2-256)
+    diffusion: 0.875,      // Floyd-Steinberg dithering strength (0.0-1.0)
+    quantize_method: QuantizeMethod::Wu,  // or QuantizeMethod::kmeans()
 };
 
 let sixel = sixel_encode(&rgba, width, height, &options)?;
@@ -64,32 +65,42 @@ let sixel = sixel_encode(&rgba, width, height, &options)?;
 use icy_sixel::sixel_decode;
 
 let sixel_data = b"\x1bPq#0;2;100;0;0#0~-\x1b\\";
-let (rgba, width, height) = sixel_decode(sixel_data)?;
-// rgba contains RGBA pixel data (4 bytes per pixel)
+let image = sixel_decode(sixel_data)?;
+// image.rgba contains RGBA pixel data (4 bytes per pixel)
+// image.width and image.height contain dimensions
 ```
 
-## CLI Examples
+## CLI Tool
 
-The crate includes command-line examples for encoding and decoding:
+The crate includes a command-line tool for encoding and decoding:
 
 ```bash
-# Encode a PNG to SIXEL
-cargo run --example encode -- image.png -o output.six
+# Install the CLI
+cargo install sixel
+
+# Encode a PNG to SIXEL (outputs to stdout by default)
+sixel encode image.png
 
 # Encode with custom settings
-cargo run --example encode -- image.png -o output.six --colors 64 --quality 80
+sixel encode image.png -o output.six --colors 64 --diffusion 0.5 --method kmeans
+
+# Read from stdin
+cat image.png | sixel encode -o output.six
 
 # Decode SIXEL to PNG
-cargo run --example decode -- image.six -o output.png
+sixel decode image.six -o output.png
+
+# Decode from stdin
+cat image.six | sixel decode -o output.png
 ```
 
 ## Architecture
 
 ### Encoder
 
-The encoder uses [imagequant](https://github.com/ImageOptim/libimagequant) for high-quality
-color quantization with dithering. This produces significantly better results than traditional
-median-cut algorithms, especially for images with gradients or complex color distributions.
+The encoder uses [quantette](https://github.com/IanManske/quantette) for high-quality
+color quantization with Wu's algorithm and Floyd-Steinberg dithering. This produces
+excellent results, especially for images with gradients or complex color distributions.
 
 ### Decoder
 
@@ -102,17 +113,113 @@ The decoder is a clean-room implementation derived from the SIXEL specification:
 
 ## Showcase
 
-Original image for reference:
+Original image for reference (596×936 pixels, 879 KB PNG):
 
 ![Original](crates/icy_sixel/tests/data/beelitz_heilstätten.png)
 
-Quality comparison using a 596×936 pixel photograph (original: 880 KB PNG):
+### Color Palette Comparison (Wu quantizer, full diffusion)
 
-| Settings | SIXEL Size | Decoded Result |
-|----------|------------|----------------|
-| `--quality 100` (default) | 1,346 KB | ![Default quality](crates/icy_sixel/tests/data/beelitz_heilstätten_six_decoded.png) |
-| `--quality 1` | 247 KB | ![Low quality](crates/icy_sixel/tests/data/beelitz_heilstätten_six_low_decoded.png) |
-| `--quality 1 --colors 2` | 100 KB | ![2 colors](crates/icy_sixel/tests/data/beelitz_heilstätten_six_2colors_decoded.png) |
+| Colors | SIXEL Size | Result |
+|--------|------------|--------|
+| 256 | 1.1 MB | ![256 colors](assets/wu/256colors_diffusion_full.png) |
+| 16 | 440 KB | ![16 colors](assets/wu/16colors_diffusion_full.png) |
+| 2 | 105 KB | ![2 colors](assets/wu/2colors_diffusion_full.png) |
+
+### Dithering Comparison (Wu quantizer, 16 colors)
+
+| Diffusion | SIXEL Size | Result |
+|-----------|------------|--------|
+| Off (0.0) | 420 KB | ![No diffusion](assets/wu/16colors_diffusion_off.png) |
+| Full (0.875) | 440 KB | ![Full diffusion](assets/wu/16colors_diffusion_full.png) |
+
+### Quantizer Comparison (256 colors, full diffusion)
+
+| Method | SIXEL Size | Result |
+|--------|------------|--------|
+| Wu | 1.1 MB | ![Wu](assets/wu/256colors_diffusion_full.png) |
+| K-means | 1.3 MB | ![K-means](assets/kmeans/256colors_diffusion_full.png) |
+
+### Encoded SIXEL File Sizes
+
+Complete size matrix for the test image (596×936 pixels):
+
+#### Wu Quantizer
+
+| Colors | Off (0.0) | Low (0.3) | Medium (0.5) | Full (0.875) |
+|--------|-----------|-----------|--------------|--------------|
+| 256 | 698 KB | 784 KB | 858 KB | 1,066 KB |
+| 16 | 420 KB | 427 KB | 432 KB | 439 KB |
+| 2 | 71 KB | 84 KB | 93 KB | 105 KB |
+
+#### K-means Quantizer
+
+| Colors | Off (0.0) | Low (0.3) | Medium (0.5) | Full (0.875) |
+|--------|-----------|-----------|--------------|--------------|
+| 256 | 1,151 KB | 1,182 KB | 1,213 KB | 1,261 KB |
+| 16 | 422 KB | 428 KB | 431 KB | 437 KB |
+| 2 | 71 KB | 85 KB | 94 KB | 107 KB |
+
+## Benchmarks
+
+Performance measurements on the test image (596×936 pixels, beelitz_heilstätten.png):
+
+### Encoder Performance
+
+| Benchmark | Time |
+|-----------|------|
+| Default (Wu, 256 colors, full diffusion) | 41.7 ms |
+
+#### Quantizer Comparison
+
+| Quantizer | Time | Notes |
+|-----------|------|-------|
+| Wu | 41.8 ms | Fast, default |
+| K-means | 88.1 ms | 2.1× slower |
+
+#### Color Count Impact
+
+| Colors | Time |
+|--------|------|
+| 256 | 42.0 ms |
+| 16 | 16.3 ms |
+| 2 | 10.8 ms |
+
+#### Diffusion Strength Impact
+
+| Diffusion | Time |
+|-----------|------|
+| Off (0.0) | 21.3 ms |
+| Low (0.3) | 31.7 ms |
+| Medium (0.5) | 34.1 ms |
+| Full (0.875) | 41.9 ms |
+
+### Decoder Performance
+
+| Benchmark | Time |
+|-----------|------|
+| Simple SIXEL | 151 ns |
+| Complex SIXEL | 677 ns |
+| Repeated patterns | 1.46 µs |
+
+#### Scaling with Size
+
+| Bands | Time |
+|-------|------|
+| 10 | 1.3 µs |
+| 50 | 15.9 µs |
+| 100 | 52.6 µs |
+| 200 | 209 µs |
+
+#### Color Palette Size
+
+| Colors | Time |
+|--------|------|
+| 1 | 150 ns |
+| 4 | 485 ns |
+| 16 | 2.0 µs |
+| 64 | 12.4 µs |
+
+*Benchmarks run with `cargo bench` using Criterion on Linux.*
 
 ## License
 
