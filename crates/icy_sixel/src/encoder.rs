@@ -141,6 +141,16 @@ fn encode_indexed_to_sixel(
     }
     out.push('q');
 
+    // Set raster attributes so terminals (especially on Windows) know the pixel grid
+    out.push('"');
+    write_number(&mut out, 1); // pan
+    out.push(';');
+    write_number(&mut out, 1); // pad
+    out.push(';');
+    write_number(&mut out, width);
+    out.push(';');
+    write_number(&mut out, height);
+
     // Define palette in RGB percent (0-100)
     for (i, c) in palette.iter().enumerate() {
         let r = (c.r as u32 * 100) / 255;
@@ -297,6 +307,19 @@ mod tests {
         ];
         let result = sixel_encode(&rgba, 2, 2, &EncodeOptions::default());
         assert!(result.is_ok());
+    }
+
+    //Testing to ensure raster attributes are included in the output is a compatibility test. When these are not included as a general rule
+    //the terminal will figure this out and display things correctly, however some terminals and specifically the Windows terminal does not
+    //display a sixel image with the correct aspect ratio unless the raster attributes are included.
+    #[test]
+    fn test_encode_includes_raster_attributes() {
+        let rgba = vec![
+            255, 0, 0, 255, // red
+            0, 0, 255, 255, // blue
+        ];
+        let sixel = sixel_encode(&rgba, 2, 1, &EncodeOptions::default()).unwrap();
+        assert!(sixel.contains("\"1;1;2;1#"));
     }
 
     #[test]
